@@ -1,0 +1,264 @@
+---
+title: "CP02 Salarios NBA (CV y Regularización)"
+author: "Diego Senso González"
+date: "9/11/2020"
+output:
+  html_document:
+    theme: united
+    df_print: paged
+    toc: yes
+    toc_depth: 5
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+---
+
+## Objetivo
+
+El objetivo de la presente gráfica es realizar los diferentes contrastes de Cross Validation (CV) y de Regularización sobre el dataset que recoge los salarios de los diferentes jugadores de la NBA, con el que se ha trabajado anteriormente.
+
+
+## Carga de librerías, datos, y limpieza del dataset.
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+rm(list=ls())
+
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(skimr)
+```
+
+Importamos y observamos los datos:
+
+```{r}
+datos_nba <- read.csv("nba.csv")
+datos_nba
+dim(datos_nba)
+skim(datos_nba)
+```
+
+Se procede a eliminar NAs y registros duplicados:
+
+```{r results='hide'}
+datos_nba <- na.omit(datos_nba)
+duplicated(datos_nba)
+nrow(datos_nba[duplicated(datos_nba),])
+datos_nba <- datos_nba[!duplicated(datos_nba$Player),]
+```
+
+A continuación, para realizar el análisis procedemos a eliminar del dataset diferentes variables categóricas, puesto que en la práctica anterior ya se había podido observar que no eran significativas. Además, puede dar problemas a la hora del análisis.
+
+```{r}
+datos_nba <- datos_nba[c(-1,-3,-6)]
+```
+
+
+## Cross-Validation
+
+### Validation Set
+La muestra disponible se divide en dos partes. Una de ellas será el training set, que servirá para entrenar al modelo. La otra parte, el testing set, tendrá su utilidad a la hora de predecir. En primer lugar, se realiza esta separación, realizando estas particiones de los datos.
+
+
+```{r setup, include=FALSE}
+library(rsample)
+set.seed(123)
+data_split <- initial_split(datos_nba, prob = 0.80, strata = Salary) #Separación de datos
+data_train <- training(data_split) #Datos para entrenar
+data_test  <-  testing(data_split) #Datos para testar
+regres_train1 <- lm(Salary~., data = datos_nba) #Regresión 1
+regres_train2 <- lm(Salary~ -PER-TS.-FTr, data = datos_nba) #Regresión 2
+c(AIC(regres_train1),AIC(regres_train2)) #El mejor dato es el menor, de la primera regres por tanto
+
+pred_1 <- predict(regres_train1,newdata = data_test)
+MSE0 <- mean((data_test$Salary-pred_1)^2)
+pred_2 <- predict(regres_train2,newdata = data_test)
+MSE1 <- mean((data_test$Salary-pred_2)^2)
+c(MSE0,MSE1)
+```
+
+En este paso, se ha procedido también a crear dos modelos diferentes, regres_train1 y regres_train2. En el primero, se ha decidido incluir todas las variables que quedaban en el modelo. En el segundo, se han eliminado tres variables, a fin de ver si el modelo empeora o mejora en ese caso. Según el valor AIC, el mejor modelo sería regres_train1, que es el que arroja un AIC menor. También se han calculado los errores, siendo menores los del primer modelo.
+
+### Leave-One-Out Cross-Validation
+Este método consiste en tomar muestras de todos los datos, quitando uno cada vez. Estima el modelo, y predice sobre el dato que se ha dejado fuera. El resultado ofrecido son los diferentes coeficientes de cada una de las variables del modelo que se utiliza. 
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+library(glmnet)
+library(boot)
+set.seed(123)
+glm.fit1 = glm(Salary~., datos_nba, family = gaussian())
+coef(glm.fit1)
+cv.err <- cv.glm(datos_nba, glm.fit1)
+cv.err$delta
+
+
+glm.fit2=glm(Salary~-PER-TS.-FTr,datos_nba,family = gaussian())
+coef(glm.fit2)
+cv.err2 =cv.glm(datos_nba,glm.fit2)
+cv.err2$delta
+```
+En cuanto al último resultado, el primer dato hace referencia al error de predicción estimado. El segundo es la estimación del cross-validation ajustado. En ambos casos, los datos son muy similares.
+
+
+### K-Fold Cross-Validation
+
+Se procede también a dividir la muestra en grupos o k-folds. Esta validación también se aplica sobre los dos modelos construidos inicialmente.
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+set.seed(123)
+cv.err =cv.glm(datos_nba,glm.fit1,K=10)
+cv.err$delta
+
+glm.fit2=glm(Salary~.-MP-PER-TS.,datos_nba,family = gaussian())
+cv.err2 =cv.glm(datos_nba,glm.fit2,K=10)
+cv.err2$delta
+```
+
+
+## Regularización
+
+La regularización es un procedimiento que trata de reducir el overfitting de un modelo mediante la reducción de las estimaciones de sus coeficientes. En caso de sufrir overfitting, la varianza será muy elevada. Un modelo con sobreajuste podría parecer un buen modelo, pero a la hora de predecir no servirá. Al estar tan determinado por los datos del training set, cuando reciba nuevos datos el modelo no operará correctamente.
+
+Las dos técnicas más importantes para realizar este proceso son el Ridge y el Lasso.
+
+### Ridge
+Es una penalización que tiene como objetivo reducir las estimaciones de los coeficientes hacia cero. En primer lugar, cargamos las librerías y realizamos la partición de los datos y separamos entre conjuntos de entranamiento y el de test.
+
+```{r}
+library(rsample) 
+library(glmnet)   
+library(dplyr)    
+library(ggplot2)  
+```
+
+```{r}
+set.seed(123)
+ames_split <- initial_split(datos_nba, prop = .7, strata = "Salary")
+ames_train <- training(ames_split)
+ames_test  <- testing(ames_split)
+
+ames_train_x <- model.matrix(Salary~., ames_train)[, -1]
+ames_train_y <- log(ames_train$Salary)
+
+ames_test_x <- model.matrix(Salary ~., ames_test)[, -1]
+ames_test_y <- log(ames_test$Salary)
+```
+
+Gracias a la función glm, se estandarizan las x del modelo. Fijamos un valor de alpha igual a 0, condición del contraste Ridge.
+```{r}
+ames_ridge <- glmnet(
+  x = ames_train_x,
+  y = ames_train_y,
+  alpha = 0
+)
+
+plot(ames_ridge, xvar = "lambda")
+
+ames_ridge_cv <- cv.glmnet(
+  x = ames_train_x,
+  y = ames_train_y,
+  alpha = 0
+)
+plot(ames_ridge_cv)
+```
+
+En este punto, se representa también gráficamente el error para cada uno de los valores de lambda. Se observa que a medida que el valor de lambda va siendo superior, el error de predicción va aumentando también. La lambda ideal estaría cercana a cero, que es un punto en el que el error aún no aumenta como lo hace posteriormente.
+
+### Lasso
+El Lasso la otra técnica para reducir el overfitting de un modelo. La diferencia con respecto al Ridge es que fija un valor de alpha igual a uno. Dentro del modelo Lasso, la gráfica que relaciona los errores de predicción con cada uno de los valores de lambda sería la siguiente:
+
+```{r}
+ames_lasso <- glmnet(
+  x = ames_train_x,
+  y = ames_train_y,
+  alpha = 1
+)
+
+plot(ames_lasso, xvar = "lambda")
+
+ames_lasso_cv <- cv.glmnet(
+  x = ames_train_x,
+  y = ames_train_y,
+  alpha = 1
+)
+# plot results
+plot(ames_lasso_cv)
+
+```
+En este caso el error parece constante, por lo que interesa coger la lambda hacia la derecha, ya que es modelo será más simple. Se seleccionaría una lambda entre las bandas discontinuas, que son un punto en el que el error sigue siendo constante.
+
+Una vez representados el error del Ridge y Lasso en función del valor de lmabda, se pueden comparar el mínimo de los errores de cada uno de los dos modelos.
+```{r}
+# Ridge MSE mínimo
+min(ames_ridge_cv$cvm)
+
+# Lasso MSE mínimo
+min(ames_lasso_cv$cvm)
+
+```
+
+Como se puede observar, el error arrojado por el modelo Lasso (alpha = 1) es menor que el del Ridge (alpha = 0).
+
+### Elastic Net
+Esta es otra penalización del modelo, que incorpora tanto la restricción Lasso como la Ridge y permite compararlos gráficamente. Además, también recoge valores para alpha de 0.25 y 0.75.
+```{r}
+lasso    <- glmnet(ames_train_x, ames_train_y, alpha = 1.0) 
+elastic1 <- glmnet(ames_train_x, ames_train_y, alpha = 0.25) 
+elastic2 <- glmnet(ames_train_x, ames_train_y, alpha = 0.75) 
+ridge    <- glmnet(ames_train_x, ames_train_y, alpha = 0.0)
+
+par(mfrow = c(2, 2), mar = c(6, 4, 6, 2) + 0.1)
+plot(lasso, xvar = "lambda", main = "Lasso (Alpha = 1)\n\n\n")
+plot(elastic1, xvar = "lambda", main = "Elastic Net (Alpha = .25)\n\n\n")
+plot(elastic2, xvar = "lambda", main = "Elastic Net (Alpha = .75)\n\n\n")
+plot(ridge, xvar = "lambda", main = "Ridge (Alpha = 0)\n\n\n")
+
+```
+
+Adicionalmente, se podrá construir una tabla que ofrezca el valor del error y los valores de lambda para cada valor de alpha.
+```{r results='hide'}
+fold_id <- sample(1:10, size = length(ames_train_y), replace=TRUE)
+
+#Construcción sin valores
+tuning_grid <- tibble::tibble(
+  alpha      = seq(0, 1, by = .1),
+  mse_min    = NA,
+  mse_1se    = NA,
+  lambda_min = NA,
+  lambda_1se = NA
+)
+tuning_grid
+```
+
+```{r}
+
+
+#Adición de valores
+for(i in seq_along(tuning_grid$alpha)) {
+
+  fit <- cv.glmnet(ames_train_x, ames_train_y, alpha = tuning_grid$alpha[i], foldid = fold_id)
+  
+  tuning_grid$mse_min[i]    <- fit$cvm[fit$lambda == fit$lambda.min]
+  tuning_grid$mse_1se[i]    <- fit$cvm[fit$lambda == fit$lambda.1se]
+  tuning_grid$lambda_min[i] <- fit$lambda.min
+  tuning_grid$lambda_1se[i] <- fit$lambda.1se
+}
+
+tuning_grid
+```
+
+Hay que coger el alpha para el menor valor de lambda existente. En este caso, el mínimo lambda se encuentra para cuando alpha es igual a 1, por lo que lo que se concluye es que el mejor método es el Lasso.
+
+### Predicción
+
+```{r}
+#Lasso
+cv_lasso   <- cv.glmnet(ames_train_x, ames_train_y, alpha = 1.0)
+min(cv_lasso$cvm)
+
+# predict
+pred <- predict(cv_lasso, s = cv_lasso$lambda.min, ames_test_x)
+mean((ames_test_y - pred)^2)
+```
+
+El último dato nos ofrece una visión de los errores del modelo a la hora de predecir.
+
+FIN.
